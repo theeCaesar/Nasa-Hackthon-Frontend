@@ -1,352 +1,673 @@
-# Space Biology Knowledge Engine – Backend Service
+# Space Biology Knowledge Engine — Backend
 
-This repository contains a Node.js/Express backend that powers a rich set of AI‑assisted features for the **NASA Space Apps Challenge 2025** entry *“Build a Space Biology Knowledge Engine”*.  The service exposes RESTful endpoints for summarisation, semantic search, conversational assistance, plain‑language explanations, study card generation and statistical analysis over a curated dataset of NASA bioscience publications.  A matching front‑end can consume these APIs to render an advanced dashboard with charts, graphs and AI‑generated insights.
+Node/Express API that powers AI search, summarization, chat, plain-language explanations, study-card generation, analytics, and user-managed resources on top of NASA space-biology publications.  
+Storage: **MongoDB**. AI: **Google Gemini** (embeddings + generation).
 
-## 🧬 Key features
+---
 
-| Feature | Description | Endpoints |
-| --- | --- | --- |
-| **AI Summariser** | Produces concise, bullet‑point summaries of publications in either an expert or student tone.  Summaries are cached in the database for reuse and can be regenerated on demand. | `GET /api/v1/summarize/:id?style=expert|student&force=true` and `POST /api/v1/summarize` |
-| **Semantic Search** | Searches publications using vector embeddings.  Queries are embedded via OpenAI’s Ada model and compared against pre‑computed embeddings of each title.  Results are ranked by cosine similarity.  Optional query parameters let you filter by publication year (`year`) or restrict results to your own custom resources (`own=true`). | `GET /api/v1/search?q=...&limit=10&year=YYYY&own=true` |
-| **Chatbot** | Wraps summarisation and search into a conversational assistant.  Given a conversation history, the assistant finds the most relevant papers, summarises them on the fly and uses them as context when replying. | `POST /api/v1/chat` |
-| **Plain‑language Explainer** | The summariser supports an optional `style` flag (`expert` or `student`).  When set to `student` the response is simplified for a non‑expert audience. | `GET/POST /api/v1/summarize` |
-| **Study Card Generator** | Generates question–answer pairs to help users learn from a publication.  Cards can optionally be exported to a PDF. | `GET /api/v1/cards/:id?count=5&pdf=true` |
-| **Graph & Stats Endpoint** | Produces aggregated statistics for the dashboard (e.g. total publications, counts by year, most frequent words across titles). | `GET /api/v1/analysis/stats` |
-| **Authentication & User Resources** | Users can register (`signup`) and log in (`login`) using a username and password.  Once authenticated they may add their own resources (title and link) which behave like NASA publications in all AI operations.  Resources are private to the owner but can be included in search results via `own=true`. | `POST /api/v1/auth/signup`, `POST /api/v1/auth/login`, `POST /api/v1/users/resources`, `GET /api/v1/users/resources`, `DELETE /api/v1/users/resources/:id` |
-| **Contact Form** | Submit feedback or support requests.  Authenticated users may omit their email; anonymous users must provide one. | `POST /api/v1/contact` |
+## Features
 
-## 🛠️ Prerequisites
+- **Auth**: Username + password (optional email). JWT tokens, bcrypt hashing, route guards.
+- **Publications dataset**: Robust CSV importer (handles UTF-16/UTF-8/BOM/CRLF). Idempotent.
+- **Semantic search**: Gemini `text-embedding-004` + cosine similarity. Filters: `year`, `own=true`.
+- **AI summarizer**: Expert/Student tone toggle; optional `force=true` refresh.
+- **Chat assistant**: Retrieval-augmented chat over the top-k most similar papers.
+- **Plain-language explainer**: Same model with simplified wording.
+- **Study cards**: Clean JSON Q&A; resilient parser; optional PDF export.
+- **Stats for dashboards**: Totals, per-year counts, top words.
+- **User resources**: Add your own links; treated like publications for all AI ops.
+- **Contact**: Store messages (links to user if authenticated).
+- **Postman collection**: All endpoints with examples.
 
-1. **Node.js 18+** and **npm** installed.
-2. **MongoDB** instance.  A local MongoDB server or a cloud service such as MongoDB Atlas will work.  The connection string is configured in `config.env`.
-3. **OpenAI API key**.  Sign up for an API key at [platform.openai.com](https://platform.openai.com/) and add it to `config.env`.
-4. **JWT secret**.  Generate a long random string and set `JWT_SECRET` in `config.env`; set `JWT_EXPIRES_IN` to control token lifetime (e.g. `30d`).
+---
 
-## 🚀 Getting started
+## Tech
 
-1. **Install dependencies**
+- **Node 18+**, **Express**, **Mongoose/MongoDB**
+- **Google Generative AI** SDK (`@google/generative-ai`)
+- Optional: PDF generator library (if `pdf=true` for cards)
 
-   ```bash
-   npm install
-   ```
+---
 
-2. **Configure environment variables**
+## Quick Start
 
-   Copy `config.env` and fill in the required values:
+### 1) Install
 
-   ```ini
-   PORT=5001
-   MONGODB_URI=mongodb+srv://user:password@cluster0.mongodb.net/spacebio
-   OPENAI_API_KEY=sk-...
-   ```
+```bash
+git clone <YOUR_REPO_URL> space-biology-engine
+cd space-biology-engine
+npm install
+```
 
-3. **Import the dataset**
+### 2) Configure environment
 
-   The project includes a script to download the latest CSV of space biology publications from GitHub and import it into MongoDB.  The default source is [theeCaesar/SB_publication_PMC.csv](https://github.com/theeCaesar/SB_publication_PMC.csv)【522284923456706†L0-L10】.  Run the import script once before starting the server:
+Create `config.env` in the project root:
 
-   ```bash
-   npm run import:data
-   ```
+```ini
+# ----- Server -----
+PORT=3000
+NODE_ENV=development
+JWT_SECRET=change_me
+JWT_EXPIRES_IN=7d
 
-   You can override the URL in `utils/importData.js` if a newer dataset becomes available.  The script only inserts new entries and will skip duplicates on subsequent runs.
+# ----- MongoDB -----
+# Use a URI that EXPLICITLY names the DB (we use space-bio)
+MONGODB_URI=mongodb+srv://USER:PASS@CLUSTER.mongodb.net/space-bio?retryWrites=true&w=majority
 
-4. **Create your first account**
+# ----- Google Gemini -----
+GOOGLE_API_KEY=AIza...your_key...
 
-   To interact with personal resources you need a user account.  Use a tool like Postman or `curl` to call the signup endpoint:
+# Optional: override dataset URL (raw CSV)
+# DATA_URL=https://raw.githubusercontent.com/theeCaesar/SB_publication_PMC.csv/main/SB_publication_PMC.csv
+```
 
-   ```bash
-   curl -X POST http://localhost:5001/api/v1/auth/signup \
-     -H "Content-Type: application/json" \
-     -d '{"username": "alice", "email": "alice@example.com", "password": "secret"}'
-   ```
+> The server also forces `{ dbName: 'space-bio' }` to avoid accidental writes to `test`.
 
-   The response will include a JWT token.  Save it – you'll need to include it in the `Authorization` header (`Bearer <token>`) for authenticated requests.
+### 3) Import the dataset
 
-5. **Start the server**
+```bash
+npm run import:data
+```
 
-   ```bash
-   npm start
-   ```
+- Downloads the CSV (if missing), fixes encodings, and imports unique `{ title, link }`.
 
-   The API will be available at `http://localhost:5001/` (or the port you set).
+### 4) Create embeddings (recommended once)
 
-## 📚 Example usage
+```bash
+npm run embed:all
+```
 
-### Summarise a publication
+- Generates Gemini `text-embedding-004` vectors for docs missing `embedding`.
+- If you skip this, `/search` will compute & save missing vectors on demand (slower first hit).
 
-Fetch a summary for a publication by its MongoDB identifier.  You can toggle the tone via the `style` query parameter (`expert` is the default and `student` produces a simpler explanation).  Setting `force=true` regenerates the summary even if it already exists.
+### 5) Run the API
+
+```bash
+npm run dev
+# or
+npm start
+```
+
+Base URL: `http://localhost:3000`
+
+---
+
+## Folder Layout
 
 ```
-GET /api/v1/summarize/651234fc9b1b9fb0218e1234?style=student&force=true
+controllers/        # Route handlers (auth, search, summarize, chat, cards, analysis, resources, contact)
+models/             # Mongoose schemas (Publication, User, ContactMessage)
+routes/             # Express routers
+utils/              # Gemini wrapper, importer, embedding script, helpers
+data/               # Cached CSV after download
+postman_collection.json
+config.env          # Your env file (not committed)
+```
 
-Response:
+---
+
+## Data Model (simplified)
+
+**Publication**
+
+- `title: string` (required)
+- `link: string` (required, unique)
+- `year?: number`
+- `summary?: string`
+- `embedding?: number[]` (Gemini vector)
+- `user?: ObjectId | null` (null for NASA; set for user resources)
+- timestamps
+
+**User**
+
+- `username: string` (required, unique)
+- `email?: string`
+- `password: string` (hashed)
+- timestamps
+
+**ContactMessage**
+
+- `user?: ObjectId`
+- `email?: string`
+- `message: string`
+- timestamps
+
+---
+
+## Authentication
+
+**Signup**  
+`POST /api/v1/auth/signup`
+
+```json
+{ "username": "astro", "email": "astro@example.com", "password": "S3cure!pass" }
+```
+
+**Login**  
+`POST /api/v1/auth/login`
+
+```json
+{ "username": "astro", "password": "S3cure!pass" }
+```
+
+Use `Authorization: Bearer <token>` for protected routes.
+
+---
+
+## Core Endpoints (summary)
+
+> See `postman_collection.json` for full examples and environments.
+
+### Search
+
+`GET /api/v1/search?q=<text>&limit=10&year=2021&own=true`
+
+- Computes query embedding.
+- Ensures docs have embeddings (computes/saves if missing).
+- Ranks by cosine similarity.
+- `own=true` restricts to the authenticated user’s resources.
+
+**Response**
+
+```json
 {
-  "title": "Microgravity induces pelvic bone loss through osteoclastic activity …",
-  "summary": "• Microgravity reduces bone formation and increases bone resorption.\n• Osteoclast activation via CDKN1a/p21 is a key mechanism.\n• Results highlight the need for countermeasures to protect astronaut skeletal health.",
-  "style": "student"
-}
-```
-
-You can also post arbitrary text:
-
-```
-POST /api/v1/summarize
-Content‑Type: application/json
-
-{
-  "title": "Effects of space radiation on cardiovascular health",
-  "text": "Space radiation exposure is a major concern …",
-  "style": "expert"
-}
-```
-
-### Perform a semantic search
-
-```
-GET /api/v1/search?q=stem%20cell%20regeneration&limit=5
-
-Response:
-{
-  "query": "stem cell regeneration",
+  "query": "microgravity stem cells",
   "count": 5,
   "results": [
-    {
-      "id": "65123abc9b1b9fb0218e5678",
-      "title": "Stem Cell Health and Tissue Regeneration in Microgravity",
-      "link": "https://www.ncbi.nlm.nih.gov/pmc/articles/PMC11988870/",
-      "score": 0.83
-    },
-    …
+    { "id": "66f...", "title": "...", "link": "https://...", "score": 0.84 }
   ]
 }
 ```
 
-You can refine search results using optional filters:
+### Summarize
 
-* `year=YYYY` – only consider publications from a specific year (if a year has been parsed for that record).
-* `own=true` – restrict the results to your custom resources.  This requires a valid JWT token in the `Authorization` header.
+`GET /api/v1/summarize/:id?style=expert|student&force=true`
 
-For example, to search only your own resources from 2023:
+- Generates or refreshes a concise summary in the requested tone.
+- Stores summary on the document for reuse.
 
-```
-GET /api/v1/search?q=biofilm&own=true&year=2023
-Authorization: Bearer <your-token>
-```
+### Chat (RAG)
 
-### Chat with the knowledge engine
+`POST /api/v1/chat`
 
-Send an array of messages following OpenAI’s chat format.  The assistant will search for relevant papers based on the latest user message, summarise them, and answer.  The response also includes a list of sources used.
-
-```
-POST /api/v1/chat
-Content‑Type: application/json
-
+```json
 {
   "messages": [
-    { "role": "user", "content": "How does microgravity affect bone density in astronauts?" }
-  ],
-  "top_k": 2
-}
-
-Response:
-{
-  "response": "Microgravity leads to rapid bone loss by decreasing osteoblast activity and …",
-  "sources": [
-    { "id": "651234…", "title": "Mice in Bion‑M 1 space mission: training and selection", "link": "https://…" },
-    { "id": "651235…", "title": "Microgravity induces pelvic bone loss through osteoclastic …", "link": "https://…" }
-  ]
-}
-```
-
-### Generate study cards
-
-```
-GET /api/v1/cards/651234fc9b1b9fb0218e1234?count=3&pdf=true
-
-Response:
-{
-  "id": "651234fc9b1b9fb0218e1234",
-  "title": "Mice in Bion‑M 1 space mission: training and selection",
-  "cards": [
-    { "question": "What was the purpose of training mice for the Bion‑M 1 mission?", "answer": "To ensure animals acclimated to launch stress and microgravity." },
-    …
-  ],
-  "pdfUrl": "/study_cards_651234fc9b1b9fb0218e1234.pdf"
-}
-```
-
-### Retrieve statistics
-
-```
-GET /api/v1/analysis/stats
-
-Response:
-{
-  "totalPublications": 608,
-  "yearCounts": { "2014": 25, "2015": 31, … },
-  "topWords": [
-    { "word": "microgravity", "count": 54 },
-    { "word": "genes", "count": 31 },
-    …
-  ]
-}
-```
-
-### Register and log in
-
-Create a new user account with a username and password (email is optional):
-
-```
-POST /api/v1/auth/signup
-Content-Type: application/json
-
-{
-  "username": "alice",
-  "email": "alice@example.com",
-  "password": "secret"
-}
-
-Response:
-{
-  "status": "success",
-  "token": "<jwt-token>",
-  "data": {
-    "user": {
-      "id": "65c…",
-      "username": "alice",
-      "email": "alice@example.com"
+    {
+      "role": "user",
+      "content": "How does microgravity affect bone formation?"
     }
+  ],
+  "top_k": 5
+}
+```
+
+- Retrieves top-k similar docs and uses them as chat context.
+
+### Plain-language Explainer
+
+`POST /api/v1/explain`
+
+```json
+{ "text": "Original abstract or paragraph..." }
+```
+
+- Returns a simpler explanation (student mode).
+
+### Study Cards
+
+`GET /api/v1/cards/:id?count=8&pdf=false`
+
+- Returns `[{ "question": "...", "answer": "..." }, ...]`
+- With `pdf=true` (if enabled), returns a PDF download URL too.
+
+### Stats / Dashboard
+
+`GET /api/v1/analysis/stats`
+
+- Returns totals, per-year counts, top words, etc., for charts.
+
+### User Resources (auth)
+
+- **Add**: `POST /api/v1/users/resources`
+  ```json
+  { "title": "My Doc", "link": "https://...", "year": 2024 }
+  ```
+- **List**: `GET /api/v1/users/resources`
+- **Delete**: `DELETE /api/v1/users/resources/:id`
+
+### Contact
+
+`POST /api/v1/contact`
+
+```json
+{ "email": "me@example.com", "message": "Hi team!" }
+```
+
+---
+
+## Postman
+
+1. Import `postman_collection.json`.
+2. Set environment variable `baseUrl` = `http://localhost:3000`.
+3. After login/signup, set `token` to your JWT, and Postman will send `Authorization: Bearer {{token}}` automatically.
+4. Try:
+   - **Import** → **Embed** → **Search** → **Summarize** → **Cards**.
+
+---
+
+## Frontend Integration Notes
+
+- Set the Vue app’s API base to `http://localhost:3000` (central config or `.env`).
+- Use `/api/v1/analysis/stats` for dashboard charts.
+- Search page should pass `q`, with optional `year` and `own=true`.
+- Summarize page can toggle `style=expert|student` and `force=true`.
+
+---
+
+## Scripts
+
+```json
+{
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "import:data": "node utils/importData.js",
+    "embed:all": "node utils/embedAll.js",
+    "debug:db": "node utils/debugDb.js"
   }
 }
 ```
 
-Log in with existing credentials:
+---
+
+## Troubleshooting
+
+- **Gemini 400 “API key not valid”**
+
+  - Ensure the env var is **GOOGLE_API_KEY** (exact name), no quotes/whitespace.
+  - Key must have access to `generativelanguage.googleapis.com`.
+  - Restart Node after changes.
+
+- **Search returns empty**
+
+  - Run `npm run embed:all`.
+  - Confirm the same DB: run `npm run debug:db` and check `DB.name`.
+  - Make sure both server and importer use `/space-bio` (or pass `{ dbName: 'space-bio' }`).
+
+- **Importer says “Parsed 0 rows”**
+
+  - The importer auto-handles BOM/UTF-16/CRLF and re-downloads empty files.
+  - If network issues persist, manually save the CSV as UTF-8 and re-run.
+
+- **Duplicate link errors**
+  - Expected on re-imports; `link` is unique and we dedupe by `link`.
+
+---
+
+## Security
+
+- Rotate API keys regularly and keep them out of source control.
+- Use a strong `JWT_SECRET`.
+- Add rate limiting and CORS allowlists for public deployments.
+- Serve over HTTPS in production; enable helmet and secure headers.
+
+---
+
+## Attribution
+
+- Dataset: Space-biology publications CSV (see `DATA_URL` in env).
+- Embeddings & generation: Google Gemini.
+- © Your Team / Hackathon Project.
+
+---
+
+**Happy building!** If you want Dockerfiles, CI/CD, or production Helm charts added later, say the word and we’ll extend this.
+
+---
+
+## Frontend Setup (Vue 3 Dashboard)
+
+A Vue 3 + Vite app that connects to this backend and renders search results, summaries, chat, study cards, and analytics with a space-themed UI.
+
+### 1) Requirements
+
+- Node 18+
+- npm or pnpm
+- Backend running at `http://localhost:3000` (or your deployed URL)
+
+### 2) Create / Use the Project
+
+If you already have a Vue project, skip to step 3. Otherwise:
+
+```bash
+npm create vite@latest space-bio-front -- --template vue
+cd space-bio-front
+npm install
+```
+
+> If you prefer TypeScript: `--template vue-ts` (and ensure `@vue/tsconfig` is installed).
+
+### 3) Environment Variables
+
+Create a `.env` in the frontend root:
 
 ```
-POST /api/v1/auth/login
-Content-Type: application/json
+VITE_API_BASE_URL=http://localhost:3000
+```
 
-{
-  "username": "alice",
-  "password": "secret"
+### 4) Install UI deps
+
+Recommended minimal stack for charts and state:
+
+```bash
+npm i axios pinia vue-router
+npm i chart.js vue-chartjs
+```
+
+### 5) Base Theme (space palette)
+
+Create `src/assets/theme.css` and import it in `src/main.js`:
+
+```css
+:root {
+  --color-bg: #000714;
+  --color-bg-2: #001940;
+  --color-primary: #0033a0; /* deep navy */
+  --color-accent: #0a81d1; /* bright blue */
+  --text-high: #e8f1ff;
+  --text-dim: #9db7d5;
 }
-
-Response:
-{
-  "status": "success",
-  "token": "<jwt-token>",
-  "data": { "user": { … } }
+html,
+body,
+#app {
+  height: 100%;
+  background: radial-gradient(
+      1000px 60% at 50% 0%,
+      var(--color-bg-2) 0%,
+      #001030 40%,
+      var(--color-bg) 80%
+    ), var(--color-primary);
+  color: var(--text-high);
+}
+a {
+  color: var(--color-accent);
+}
+.button-primary {
+  background: var(--color-accent);
+  color: #031833;
+  border: 1px solid var(--color-accent);
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-weight: 600;
 }
 ```
 
-Include the returned token as a Bearer token in the `Authorization` header for any authenticated requests.
+### 6) Axios client
 
-### Manage your own resources
+Create `src/lib/api.js`:
 
-Add a custom resource:
+```js
+import axios from "axios";
 
-```
-POST /api/v1/users/resources
-Authorization: Bearer <your-token>
-Content-Type: application/json
+export const api = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:3000",
+  withCredentials: false,
+});
 
-{
-  "title": "Review of algae growth in microgravity",
-  "link": "https://doi.org/10.1000/example"
-}
+// Attach JWT if present
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token");
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 
-Response:
-{
-  "status": "success",
-  "data": {
-    "resource": {
-      "_id": "6512…",
-      "title": "Review of algae growth in microgravity",
-      "link": "https://doi.org/10.1000/example",
-      "user": "65c…",
-      "createdAt": "2025-10-05T…"
+// Optional: handle 401
+api.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    if (err?.response?.status === 401) {
+      localStorage.removeItem("token");
+      // Optionally redirect to login
     }
+    return Promise.reject(err);
   }
+);
+```
+
+### 7) Router + Store
+
+Create `src/router/index.js`:
+
+```js
+import { createRouter, createWebHistory } from "vue-router";
+import Home from "@/views/Home.vue";
+import Search from "@/views/Search.vue";
+import Stats from "@/views/Stats.vue";
+import Cards from "@/views/Cards.vue";
+import Chat from "@/views/Chat.vue";
+import Login from "@/views/Login.vue";
+import Signup from "@/views/Signup.vue";
+import Resources from "@/views/Resources.vue";
+import Contact from "@/views/Contact.vue";
+
+const routes = [
+  { path: "/", component: Home },
+  { path: "/search", component: Search },
+  { path: "/stats", component: Stats },
+  { path: "/cards/:id", component: Cards, props: true },
+  { path: "/chat", component: Chat },
+  { path: "/login", component: Login },
+  { path: "/signup", component: Signup },
+  { path: "/resources", component: Resources },
+  { path: "/contact", component: Contact },
+];
+
+export default createRouter({ history: createWebHistory(), routes });
+```
+
+Create `src/stores/auth.js`:
+
+```js
+import { defineStore } from "pinia";
+import { api } from "@/lib/api";
+
+export const useAuth = defineStore("auth", {
+  state: () => ({ user: null, token: localStorage.getItem("token") || "" }),
+  actions: {
+    async signup(payload) {
+      const { data } = await api.post("/api/v1/auth/signup", payload);
+      this.user = data.user;
+      this.token = data.token;
+      localStorage.setItem("token", this.token);
+    },
+    async login(payload) {
+      const { data } = await api.post("/api/v1/auth/login", payload);
+      this.user = data.user;
+      this.token = data.token;
+      localStorage.setItem("token", this.token);
+    },
+    logout() {
+      this.user = null;
+      this.token = "";
+      localStorage.removeItem("token");
+    },
+  },
+});
+```
+
+Wire in `src/main.js`:
+
+```js
+import { createApp } from "vue";
+import { createPinia } from "pinia";
+import router from "@/router";
+import App from "./App.vue";
+import "@/assets/theme.css";
+
+createApp(App).use(createPinia()).use(router).mount("#app");
+```
+
+### 8) Pages – minimal calls
+
+**Search** (`src/views/Search.vue`):
+
+```vue
+<script setup>
+import { ref } from "vue";
+import { api } from "@/lib/api";
+const q = ref("");
+const year = ref("");
+const own = ref(false);
+const results = ref([]);
+async function doSearch() {
+  const { data } = await api.get("/api/v1/search", {
+    params: {
+      q: q.value,
+      year: year.value || undefined,
+      own: own.value || undefined,
+      limit: 10,
+    },
+  });
+  results.value = data.results || [];
 }
+</script>
+
+<template>
+  <section>
+    <h1>Semantic Search</h1>
+    <input v-model="q" placeholder="Search…" />
+    <input v-model="year" placeholder="Year (optional)" />
+    <label><input type="checkbox" v-model="own" /> My resources only</label>
+    <button class="button-primary" @click="doSearch">Search</button>
+    <ul>
+      <li v-for="r in results" :key="r.id">
+        <a :href="r.link" target="_blank">{{ r.title }}</a> —
+        {{ r.score.toFixed(3) }}
+      </li>
+    </ul>
+  </section>
+</template>
 ```
 
-List your resources:
+**Summary** (part of a Paper view):
 
-```
-GET /api/v1/users/resources
-Authorization: Bearer <your-token>
-
-Response:
-{
-  "status": "success",
-  "count": 2,
-  "data": {
-    "resources": [ { … }, … ]
-  }
-}
+```js
+// GET /api/v1/summarize/:id?style=student|expert&force=false
 ```
 
-Delete a resource:
+**Cards** (`src/views/Cards.vue`):
 
-```
-DELETE /api/v1/users/resources/6512…
-Authorization: Bearer <your-token>
+```vue
+<script setup>
+import { onMounted, ref } from "vue";
+import { useRoute } from "vue-router";
+import { api } from "@/lib/api";
+const route = useRoute();
+const cards = ref([]);
+onMounted(async () => {
+  const { data } = await api.get(`/api/v1/cards/${route.params.id}`, {
+    params: { count: 8, pdf: false },
+  });
+  cards.value = data.cards || data || [];
+});
+</script>
 
-Response: 204 No Content
-```
-
-### Send a contact message
-
-```
-POST /api/v1/contact
-Content-Type: application/json
-
-{
-  "email": "visitor@example.com",
-  "message": "I love this project!"
-}
-
-// If authenticated you may omit the email field:
-POST /api/v1/contact
-Authorization: Bearer <your-token>
-Content-Type: application/json
-
-{
-  "message": "Please add more plant biology papers."
-}
-
-Response:
-{
-  "status": "success",
-  "data": { "id": "6512…" }
-}
+<template>
+  <section>
+    <h1>Study Cards</h1>
+    <ul>
+      <li v-for="(c, i) in cards" :key="i">
+        <strong>Q:</strong> {{ c.question }}<br /><strong>A:</strong>
+        {{ c.answer }}
+      </li>
+    </ul>
+  </section>
+</template>
 ```
 
-## 📬 Postman collection
+**Stats** (`src/views/Stats.vue`) with Chart.js:
 
-A Postman collection (`postman_collection.json`) is provided in this repository.  Import it into Postman to explore and test each endpoint quickly.  The collection defines example requests and demonstrates how to pass query parameters and request bodies.
+```vue
+<script setup>
+import { onMounted, ref } from "vue";
+import { api } from "@/lib/api";
+import { Bar } from "vue-chartjs";
+import {
+  Chart,
+  BarElement,
+  CategoryScale,
+  LinearScale,
+  Tooltip,
+  Legend,
+} from "chart.js";
+Chart.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
-## 🧱 Project structure
+const data = ref({ labels: [], datasets: [] });
 
+onMounted(async () => {
+  const res = await api.get("/api/v1/analysis/stats");
+  const years = Object.keys(res.data.yearCounts || {}).sort();
+  const counts = years.map((y) => res.data.yearCounts[y]);
+  data.value = {
+    labels: years,
+    datasets: [{ label: "Publications per year", data: counts }],
+  };
+});
+</script>
+
+<template>
+  <section>
+    <h1>Insights</h1>
+    <Bar
+      :data="data"
+      :options="{ responsive: true, maintainAspectRatio: false }"
+      style="height: 420px;"
+    />
+  </section>
+</template>
 ```
-space-biology-engine/
-├── controllers/        # Route handlers for each feature
-├── models/             # Mongoose schemas for publications, users and contact messages
-├── routes/             # Express routers defining API endpoints
-├── utils/              # OpenAI wrapper, scraping helper and import script
-├── data/               # CSV dataset (downloaded on import)
-├── public/             # Generated PDFs and other static assets
-├── app.js              # Express app configuration
-├── server.js           # Server bootstrap and DB connection
-├── config.env          # Environment variables (fill this out!)
-└── README.md           # This documentation
+
+### 9) Hero with Stars + Rotating Earth
+
+You can drop in a ready component called `HeroSection.vue` that renders a twinkling starfield (Canvas) and a rotating Earth limb (SVG) using the app palette `#0033A0` and `#0A81D1`.
+
+- Place the component at `src/components/HeroSection.vue`.
+- Use it in `src/views/Home.vue`:
+
+```vue
+<template><HeroSection /></template>
+<script setup>
+import HeroSection from "@/components/HeroSection.vue";
+</script>
 ```
 
-## 🔒 Notes on security and privacy
+> (We shared a full HeroSection example earlier—paste it as-is, or ask Cursor to generate it using these specs).
 
-All AI capabilities rely on the OpenAI API; your prompts and titles are transmitted to OpenAI’s servers for processing.  Do not submit sensitive or proprietary information.  The provided `config.env` file intentionally omits secret keys – please supply your own credentials and keep them private.  The dataset imported from GitHub contains only publication titles and links; the full article text is fetched directly from the publisher at request time and is not stored persistently.
+For a full 3D globe instead of SVG limb, consider:
 
-## 📄 License
+- **Globe.gl**: `npm i globe.gl three` (realistic textures + atmosphere)
+- **Cobe**: `npm i cobe` (lightweight, silky rotation)
+- **VueCesium**: `npm i vue-cesium cesium` (heavy but stunning, full 3D globe)
 
-This project is released under the MIT License.  It is intended for educational purposes within the NASA Space Apps Challenge and carries no warranty.#   N a s a - H a c k t h o n - F r o n t e n d  
- 
+### 10) CORS
+
+Make sure your backend allows the frontend origin (dev server is usually `http://localhost:5173`). In Express:
+
+```js
+const cors = require("cors");
+app.use(cors({ origin: ["http://localhost:5173"], credentials: false }));
+```
+
+### 11) Run the Frontend
+
+```bash
+npm run dev
+# open http://localhost:5173
+```
+
+### 12) Deploy notes
+
+- Set `VITE_API_BASE_URL` to your production API URL.
+- Enable HTTPS and CDN caching.
+- Consider code-splitting (`router` lazy routes) for faster first paint.
